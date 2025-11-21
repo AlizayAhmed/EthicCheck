@@ -86,7 +86,11 @@ if 'analysis_history' not in st.session_state:
 @st.cache_resource
 def init_groq_client():
     load_dotenv()
-    api_key = os.getenv("GROQ_API_KEY", "")
+    try:
+        api_key = st.secrets.get("GROQ_API_KEY", "")
+    except:
+        api_key = os.getenv("GROQ_API_KEY", "")
+#    api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         st.warning("⚠️ Please set your GROQ_API_KEY environment variable")
         return None
