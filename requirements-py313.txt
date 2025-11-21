@@ -1,0 +1,22 @@
+# Core Framework
+streamlit==1.40.0
+
+# AI/ML Models
+groq==0.13.0
+sentence-transformers==3.3.1
+transformers==4.46.3
+torch==2.5.1
+
+# Document Processing
+PyPDF2==3.0.1
+python-docx==1.1.2
+markdown==3.7
+
+# Data Processing
+numpy>=2.1.0
+pandas==2.2.3
+
+# Utilities
+requests==2.32.3
+python-dotenv==1.0.1
+regex==2024.11.6

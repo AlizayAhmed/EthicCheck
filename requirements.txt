@@ -1,36 +1,25 @@
 # Core Framework
-streamlit==1.31.0
+streamlit==1.40.0
 
 # AI/ML Models
+<<<<<<< HEAD
 groq==0.4.1
 sentence-transformers==2.3.1
 transformers==4.37.2
+=======
+groq==0.13.0
+sentence-transformers==3.3.1
+transformers==4.57.1
+torch==2.9.1
+>>>>>>> fe9f83a (Fix: Updated model to llama-3.3-70b-versatile and updated requirements.txt)
 
 # Document Processing
 PyPDF2==3.0.1
-python-docx==1.1.0
-python-magic-bin==0.4.14
-markdown==3.5.2
-
-# Data Processing
-numpy==1.26.3
-pandas==2.2.0
-
-# Vector Storage (Optional - uncomment if needed)
-# faiss-cpu==1.7.4
-# pinecone-client==3.0.0
-
-# Code Analysis
-autopep8==2.0.4
-
-# Web & API
-requests==2.31.0
 python-dotenv==1.0.1
 
-# Utilities
-tqdm==4.66.1
-regex==2023.12.25
+# Data Processing
+numpy>=2.1.0
+pandas==2.2.3
 
-# Testing (Optional)
-# pytest==8.0.0
-# pytest-cov==4.1.0
+# Utilities
+requests==2.32.3

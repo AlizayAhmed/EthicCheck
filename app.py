@@ -13,7 +13,7 @@ import numpy as np
 from datetime import datetime
 import PyPDF2
 import io
-
+from dotenv import load_dotenv
 # ==================== CONFIGURATION ====================
 
 # Page configuration
@@ -85,6 +85,7 @@ if 'analysis_history' not in st.session_state:
 # Initialize Groq client
 @st.cache_resource
 def init_groq_client():
+    load_dotenv()
     api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         st.warning("⚠️ Please set your GROQ_API_KEY environment variable")
@@ -236,7 +237,7 @@ def analyze_with_groq(text, artifact_type, check_options):
     
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.1-70b-versatile",  # or mixtral-8x7b-32768
+            model="llama-3.3-70b-versatile",  # or mixtral-8x7b-32768
             messages=[
                 {
                     "role": "system",
