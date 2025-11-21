@@ -1,0 +1,612 @@
+"""
+EthicCheck - AI-Powered Ethical Analysis for Student Projects
+Complete Streamlit Application with Groq API Integration
+"""
+
+import streamlit as st
+import os
+import re
+import json
+from groq import Groq
+from sentence_transformers import SentenceTransformer
+import numpy as np
+from datetime import datetime
+import PyPDF2
+import io
+
+# ==================== CONFIGURATION ====================
+
+# Page configuration
+st.set_page_config(
+    page_title="EthicCheck - AI Ethics Analyzer",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for professional styling
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+        background: white;
+        padding: 1.5rem;
+        border-radius: 8px;
+        border-left: 4px solid #667eea;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .issue-card-high {
+        background: #fee2e2;
+        border-left: 4px solid #dc2626;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+    .issue-card-medium {
+        background: #fef3c7;
+        border-left: 4px solid #f59e0b;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+    .issue-card-low {
+        background: #dbeafe;
+        border-left: 4px solid #3b82f6;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+    .stButton>button {
+        width: 100%;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        padding: 0.75rem 2rem;
+        font-weight: 600;
+        border-radius: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==================== INITIALIZATION ====================
+
+# Initialize session state
+if 'analysis_results' not in st.session_state:
+    st.session_state.analysis_results = None
+if 'analysis_history' not in st.session_state:
+    st.session_state.analysis_history = []
+
+# Initialize Groq client
+@st.cache_resource
+def init_groq_client():
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        st.warning("⚠️ Please set your GROQ_API_KEY environment variable")
+        return None
+    return Groq(api_key=api_key)
+
+# Initialize embedding model
+@st.cache_resource
+def init_embedding_model():
+    return SentenceTransformer('all-MiniLM-L6-v2')
+
+groq_client = init_groq_client()
+embedding_model = init_embedding_model()
+
+# ==================== UTILITY FUNCTIONS ====================
+
+def extract_text_from_pdf(pdf_file):
+    """Extract text from uploaded PDF"""
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(pdf_file.read()))
+        text = ""
+        for page in pdf_reader.pages:
+            text += page.extract_text()
+        return text
+    except Exception as e:
+        return f"Error extracting PDF: {str(e)}"
+
+def detect_pii(text):
+    """Detect PII patterns using regex"""
+    findings = []
+    
+    # Email pattern
+    emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
+    if emails:
+        findings.append({
+            'type': 'Email',
+            'count': len(emails),
+            'examples': emails[:3]
+        })
+    
+    # Phone pattern
+    phones = re.findall(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text)
+    if phones:
+        findings.append({
+            'type': 'Phone',
+            'count': len(phones),
+            'examples': phones[:3]
+        })
+    
+    # SSN-like pattern
+    ssns = re.findall(r'\b\d{3}-\d{2}-\d{4}\b', text)
+    if ssns:
+        findings.append({
+            'type': 'SSN-like',
+            'count': len(ssns),
+            'examples': ['XXX-XX-XXXX'] * len(ssns)
+        })
+    
+    return findings
+
+def detect_code_issues(code_text):
+    """Detect security issues in code"""
+    issues = []
+    
+    # Check for hardcoded credentials
+    credential_patterns = [
+        r'password\s*=\s*["\'][^"\']+["\']',
+        r'api[_-]?key\s*=\s*["\'][^"\']+["\']',
+        r'secret\s*=\s*["\'][^"\']+["\']',
+        r'token\s*=\s*["\'][^"\']+["\']'
+    ]
+    
+    for pattern in credential_patterns:
+        matches = re.findall(pattern, code_text, re.IGNORECASE)
+        if matches:
+            issues.append({
+                'type': 'Hardcoded Credentials',
+                'severity': 'high',
+                'count': len(matches)
+            })
+    
+    # Check for dangerous operations
+    dangerous_ops = ['os.system', 'subprocess.call', 'eval(', 'exec(']
+    for op in dangerous_ops:
+        if op in code_text:
+            issues.append({
+                'type': f'Dangerous Operation: {op}',
+                'severity': 'medium',
+                'count': code_text.count(op)
+            })
+    
+    return issues
+
+def check_ethical_keywords(text):
+    """Check for ethical red flags"""
+    red_flags = []
+    
+    high_risk_keywords = [
+        'scrape', 'bypass', 'circumvent', 'crack', 'exploit',
+        'phishing', 'surveillance', 'deepfake', 'weaponize'
+    ]
+    
+    medium_risk_keywords = [
+        'face recognition', 'biometric', 'tracking', 'profile',
+        'without consent', 'unauthorized', 'private data'
+    ]
+    
+    text_lower = text.lower()
+    
+    for keyword in high_risk_keywords:
+        if keyword in text_lower:
+            context = extract_context(text, keyword)
+            red_flags.append({
+                'keyword': keyword,
+                'severity': 'high',
+                'context': context
+            })
+    
+    for keyword in medium_risk_keywords:
+        if keyword in text_lower:
+            context = extract_context(text, keyword)
+            red_flags.append({
+                'keyword': keyword,
+                'severity': 'medium',
+                'context': context
+            })
+    
+    return red_flags
+
+def extract_context(text, keyword, window=100):
+    """Extract context around keyword"""
+    idx = text.lower().find(keyword.lower())
+    if idx == -1:
+        return ""
+    start = max(0, idx - window)
+    end = min(len(text), idx + len(keyword) + window)
+    return "..." + text[start:end] + "..."
+
+# ==================== GROQ API INTEGRATION ====================
+
+def analyze_with_groq(text, artifact_type, check_options):
+    """Main analysis function using Groq API"""
+    
+    if not groq_client:
+        return None
+    
+    # Build analysis prompt
+    prompt = build_analysis_prompt(text, artifact_type, check_options)
+    
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-70b-versatile",  # or mixtral-8x7b-32768
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are EthicCheck, an AI assistant specialized in analyzing student projects for ethical concerns. 
+                    You identify issues related to privacy, bias, licensing, plagiarism, security, and harmful use.
+                    Always output valid JSON with the following structure:
+                    {
+                        "overall_score": "low|medium|high",
+                        "issues": [
+                            {
+                                "category": "Privacy|Bias|License|Plagiarism|Security|Harmful Use",
+                                "severity": "low|medium|high",
+                                "title": "Brief title",
+                                "evidence": "Quote from text",
+                                "location": "Section reference",
+                                "recommendation": "Concrete fix",
+                                "suggested_rewrite": "Optional rewritten text"
+                            }
+                        ],
+                        "student_summary": "Brief summary for student",
+                        "instructor_notes": "Notes for instructor review"
+                    }"""
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=2000
+        )
+        
+        result = response.choices[0].message.content
+        
+        # Try to parse JSON
+        try:
+            # Extract JSON if wrapped in markdown
+            if "```json" in result:
+                result = result.split("```json")[1].split("```")[0]
+            elif "```" in result:
+                result = result.split("```")[1].split("```")[0]
+            
+            return json.loads(result)
+        except json.JSONDecodeError:
+            # If JSON parsing fails, create structured response
+            return {
+                "overall_score": "medium",
+                "issues": [{
+                    "category": "Analysis",
+                    "severity": "medium",
+                    "title": "Analysis Completed",
+                    "evidence": "See detailed response",
+                    "location": "Full document",
+                    "recommendation": result,
+                    "suggested_rewrite": None
+                }],
+                "student_summary": result[:500],
+                "instructor_notes": "Please review the full analysis."
+            }
+            
+    except Exception as e:
+        st.error(f"Error calling Groq API: {str(e)}")
+        return None
+
+def build_analysis_prompt(text, artifact_type, check_options):
+    """Build structured prompt for Groq"""
+    
+    prompt = f"""Analyze the following {artifact_type} for ethical concerns.
+
+ARTIFACT TEXT:
+{text[:4000]}  # Limit to avoid token limits
+
+ANALYSIS FOCUS:
+"""
+    
+    if check_options.get('privacy', False):
+        prompt += "- Privacy and PII exposure\n"
+    if check_options.get('bias', False):
+        prompt += "- Bias and fairness issues\n"
+    if check_options.get('license', False):
+        prompt += "- License compliance\n"
+    if check_options.get('plagiarism', False):
+        prompt += "- Potential plagiarism\n"
+    if check_options.get('security', False):
+        prompt += "- Security vulnerabilities\n"
+    if check_options.get('harmful', False):
+        prompt += "- Harmful use cases\n"
+    
+    prompt += """
+POLICY RULES:
+- Privacy: Personal data without consent = HIGH severity
+- Bias: Underrepresented groups in datasets = MEDIUM severity
+- License: Using incompatible licenses = MEDIUM severity
+- Harmful use: Enabling illegal/harmful activities = HIGH severity
+- Security: Exposed credentials or dangerous operations = HIGH severity
+
+Output valid JSON only. Be specific with evidence and provide actionable recommendations.
+"""
+    
+    return prompt
+
+# ==================== UI COMPONENTS ====================
+
+def render_header():
+    """Render main header"""
+    st.markdown("""
+    <div class="main-header">
+        <h1>🛡️ EthicCheck</h1>
+        <p style="font-size: 1.2rem; margin-top: 0.5rem;">
+            AI-Powered Ethical Analysis for Student Projects
+        </p>
+        <p style="font-size: 0.9rem; opacity: 0.9; margin-top: 0.5rem;">
+            Powered by Groq • Llama 3 • Sentence Transformers
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+def render_upload_section():
+    """Render upload and input section"""
+    st.subheader("📤 Submit Your Project")
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # File upload
+        uploaded_file = st.file_uploader(
+            "Upload document or code",
+            type=['txt', 'pdf', 'py', 'md', 'ipynb'],
+            help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks"
+        )
+        
+        # Text input
+        text_input = st.text_area(
+            "Or paste your content here",
+            height=200,
+            placeholder="Paste your project proposal, code, or methodology..."
+        )
+        
+        # Git URL input
+        git_url = st.text_input(
+            "Or enter Git repository URL",
+            placeholder="https://github.com/username/repo"
+        )
+    
+    with col2:
+        artifact_type = st.selectbox(
+            "Project Type",
+            ["Proposal", "Code", "Dataset Description", "Full Report"]
+        )
+        
+        st.markdown("### Analysis Options")
+        check_options = {
+            'privacy': st.checkbox("Privacy & PII", value=True),
+            'bias': st.checkbox("Bias & Fairness", value=True),
+            'license': st.checkbox("License Compliance", value=True),
+            'plagiarism': st.checkbox("Plagiarism Check", value=True),
+            'security': st.checkbox("Security Issues", value=True),
+            'harmful': st.checkbox("Harmful Use Detection", value=True)
+        }
+    
+    return uploaded_file, text_input, git_url, artifact_type, check_options
+
+def render_results(results):
+    """Render analysis results"""
+    if not results:
+        return
+    
+    # Overall metrics
+    st.markdown("### 📊 Analysis Summary")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    issues = results.get('issues', [])
+    high_count = len([i for i in issues if i['severity'] == 'high'])
+    medium_count = len([i for i in issues if i['severity'] == 'medium'])
+    low_count = len([i for i in issues if i['severity'] == 'low'])
+    
+    with col1:
+        st.metric("Overall Risk", results.get('overall_score', 'N/A').upper())
+    with col2:
+        st.metric("High Priority", high_count, delta=None, delta_color="inverse")
+    with col3:
+        st.metric("Medium Priority", medium_count)
+    with col4:
+        st.metric("Low Priority", low_count)
+    
+    # Student summary
+    st.markdown("### 📝 Summary for Students")
+    st.info(results.get('student_summary', 'No summary available'))
+    
+    # Issues details
+    st.markdown("### 🔍 Detailed Issues")
+    
+    if not issues:
+        st.success("✅ No significant ethical issues detected!")
+        return
+    
+    # Sort by severity
+    sorted_issues = sorted(issues, key=lambda x: {'high': 0, 'medium': 1, 'low': 2}[x['severity']])
+    
+    for idx, issue in enumerate(sorted_issues):
+        severity = issue['severity']
+        card_class = f"issue-card-{severity}"
+        
+        with st.expander(f"{'🔴' if severity == 'high' else '🟡' if severity == 'medium' else '🔵'} {issue['title']} [{severity.upper()}]"):
+            st.markdown(f"**Category:** {issue['category']}")
+            st.markdown(f"**Location:** {issue['location']}")
+            
+            st.markdown("**Evidence:**")
+            st.code(issue['evidence'], language=None)
+            
+            st.markdown("**Recommendation:**")
+            st.write(issue['recommendation'])
+            
+            if issue.get('suggested_rewrite'):
+                st.markdown("**Suggested Fix:**")
+                st.success(issue['suggested_rewrite'])
+                if st.button(f"Copy Fix #{idx+1}", key=f"copy_{idx}"):
+                    st.write("✅ Copied to clipboard (simulated)")
+    
+    # Instructor notes
+    with st.expander("👨‍🏫 Instructor Notes"):
+        st.write(results.get('instructor_notes', 'No additional notes'))
+    
+    # Export options
+    st.markdown("### 💾 Export")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📄 Export PDF Report"):
+            st.info("PDF export functionality coming soon!")
+    with col2:
+        if st.button("📧 Email to Instructor"):
+            st.info("Email functionality coming soon!")
+
+# ==================== MAIN APP ====================
+
+def main():
+    render_header()
+    
+    # Sidebar
+    with st.sidebar:
+        st.markdown("### ℹ️ About EthicCheck")
+        st.write("""
+        EthicCheck analyzes student projects for:
+        - 🔒 Privacy violations
+        - ⚖️ Bias and fairness issues
+        - 📜 License compliance
+        - 🔍 Plagiarism indicators
+        - 🛡️ Security vulnerabilities
+        - ⚠️ Harmful use cases
+        """)
+        
+        st.markdown("---")
+        st.markdown("### 🔐 Privacy")
+        st.write("Data processed ephemerally. No permanent storage.")
+        
+        st.markdown("---")
+        if st.button("🗑️ Clear Results"):
+            st.session_state.analysis_results = None
+            st.rerun()
+    
+    # Main content
+    tabs = st.tabs(["📤 Upload & Analyze", "📊 Results", "📚 History"])
+    
+    with tabs[0]:
+        uploaded_file, text_input, git_url, artifact_type, check_options = render_upload_section()
+        
+        if st.button("🚀 Analyze Project", type="primary"):
+            # Get input text
+            input_text = ""
+            
+            if uploaded_file:
+                if uploaded_file.type == "application/pdf":
+                    input_text = extract_text_from_pdf(uploaded_file)
+                else:
+                    input_text = uploaded_file.read().decode('utf-8')
+            elif text_input:
+                input_text = text_input
+            elif git_url:
+                st.warning("Git repository cloning coming soon! Please paste code instead.")
+                return
+            else:
+                st.error("Please provide input: upload a file, paste text, or enter a Git URL")
+                return
+            
+            if not input_text or len(input_text) < 50:
+                st.error("Input text is too short. Please provide more content.")
+                return
+            
+            # Run analysis
+            with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
+                # Deterministic checks
+                progress = st.progress(0)
+                status = st.empty()
+                
+                status.text("Running PII detection...")
+                progress.progress(20)
+                pii_findings = detect_pii(input_text)
+                
+                status.text("Checking code security...")
+                progress.progress(40)
+                code_issues = detect_code_issues(input_text)
+                
+                status.text("Scanning for ethical keywords...")
+                progress.progress(60)
+                keyword_flags = check_ethical_keywords(input_text)
+                
+                status.text("Running AI analysis...")
+                progress.progress(80)
+                
+                # Main Groq analysis
+                results = analyze_with_groq(input_text, artifact_type, check_options)
+                
+                progress.progress(100)
+                status.text("Analysis complete!")
+                
+                if results:
+                    # Enhance results with deterministic findings
+                    if pii_findings:
+                        results['issues'].insert(0, {
+                            'category': 'Privacy',
+                            'severity': 'high',
+                            'title': 'PII Detected in Document',
+                            'evidence': f"Found {len(pii_findings)} types of PII",
+                            'location': 'Throughout document',
+                            'recommendation': 'Remove or anonymize all personal identifiers',
+                            'suggested_rewrite': 'Replace specific PII with placeholders like [NAME], [EMAIL]'
+                        })
+                    
+                    if code_issues:
+                        for issue in code_issues:
+                            results['issues'].append({
+                                'category': 'Security',
+                                'severity': issue['severity'],
+                                'title': issue['type'],
+                                'evidence': f"Detected {issue['count']} occurrence(s)",
+                                'location': 'Code sections',
+                                'recommendation': 'Use environment variables or secure vaults for credentials',
+                                'suggested_rewrite': 'Use: os.getenv("API_KEY") instead of hardcoding'
+                            })
+                    
+                    st.session_state.analysis_results = results
+                    st.session_state.analysis_history.append({
+                        'timestamp': datetime.now(),
+                        'artifact_type': artifact_type,
+                        'results': results
+                    })
+                    
+                    st.success("✅ Analysis complete! Switch to Results tab.")
+                else:
+                    st.error("Analysis failed. Please check your Groq API key and try again.")
+    
+    with tabs[1]:
+        if st.session_state.analysis_results:
+            render_results(st.session_state.analysis_results)
+        else:
+            st.info("No analysis results yet. Upload and analyze a project first.")
+    
+    with tabs[2]:
+        if st.session_state.analysis_history:
+            st.markdown("### 📚 Analysis History")
+            for idx, entry in enumerate(reversed(st.session_state.analysis_history)):
+                with st.expander(f"Analysis {len(st.session_state.analysis_history) - idx} - {entry['timestamp'].strftime('%Y-%m-%d %H:%M')}"):
+                    st.write(f"**Type:** {entry['artifact_type']}")
+                    st.write(f"**Issues Found:** {len(entry['results'].get('issues', []))}")
+                    if st.button(f"View Details #{idx}", key=f"history_{idx}"):
+                        st.session_state.analysis_results = entry['results']
+                        st.rerun()
+        else:
+            st.info("No analysis history yet.")
+
+if __name__ == "__main__":
+    main()
