@@ -28,6 +28,16 @@ from ip_copyright_checker import (
     generate_ip_summary
 )
 
+from privacy_checker import (
+    run_privacy_check,
+    generate_privacy_summary
+)
+
+from plagiarism_checker import (
+    run_plagiarism_check,
+    generate_plagiarism_summary
+)
+
 # ==================== CONFIGURATION ====================
 
 # Page configuration
@@ -130,59 +140,9 @@ def extract_text_from_pdf(pdf_file):
     except Exception as e:
         return f"Error extracting PDF: {str(e)}"
 
-def detect_pii(text):
-    """Detect PII patterns using regex"""
-    findings = []
-    
-    # Email pattern
-    emails = re.findall(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', text)
-    if emails:
-        findings.append({
-            'type': 'Email',
-            'count': len(emails),
-            'examples': emails[:3]
-        })
-    
-    # Phone pattern
-    phones = re.findall(r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b', text)
-    if phones:
-        findings.append({
-            'type': 'Phone',
-            'count': len(phones),
-            'examples': phones[:3]
-        })
-    
-    # SSN-like pattern
-    ssns = re.findall(r'\b\d{3}-\d{2}-\d{4}\b', text)
-    if ssns:
-        findings.append({
-            'type': 'SSN-like',
-            'count': len(ssns),
-            'examples': ['XXX-XX-XXXX'] * len(ssns)
-        })
-    
-    return findings
-
 def detect_code_issues(code_text):
     """Detect security issues in code"""
     issues = []
-    
-    # Check for hardcoded credentials
-    credential_patterns = [
-        r'password\s*=\s*["\'][^"\']+["\']',
-        r'api[_-]?key\s*=\s*["\'][^"\']+["\']',
-        r'secret\s*=\s*["\'][^"\']+["\']',
-        r'token\s*=\s*["\'][^"\']+["\']'
-    ]
-    
-    for pattern in credential_patterns:
-        matches = re.findall(pattern, code_text, re.IGNORECASE)
-        if matches:
-            issues.append({
-                'type': 'Hardcoded Credentials',
-                'severity': 'high',
-                'count': len(matches)
-            })
     
     # Check for dangerous operations
     dangerous_ops = ['os.system', 'subprocess.call', 'eval(', 'exec(']
@@ -424,10 +384,14 @@ def render_upload_section():
             'bias': st.checkbox("Bias & Fairness", value=True),
             'plagiarism': st.checkbox("Plagiarism Check", value=True)
         }
+        
+        # Plagiarism check warning
+        if check_options['plagiarism']:
+            st.caption("⏱️ Plagiarism check may take 20-40 seconds")
     
     return uploaded_file, text_input, git_url, check_options
 
-def render_results(results, bias_findings=None, ip_findings=None):
+def render_results(results, bias_findings=None, ip_findings=None, privacy_findings=None, plagiarism_findings=None):
     """Render analysis results"""
     if not results:
         return
@@ -438,9 +402,9 @@ def render_results(results, bias_findings=None, ip_findings=None):
     col1, col2, col3, col4 = st.columns(4)
     
     issues = results.get('issues', [])
-    high_count = len([i for i in issues if i['severity'] == 'high'])
-    medium_count = len([i for i in issues if i['severity'] == 'medium'])
-    low_count = len([i for i in issues if i['severity'] == 'low'])
+    high_count = len([i for i in issues if i.get('severity') == 'high'])
+    medium_count = len([i for i in issues if i.get('severity') == 'medium'])
+    low_count = len([i for i in issues if i.get('severity') == 'low'])
     
     with col1:
         st.metric("Overall Risk", results.get('overall_score', 'N/A').upper())
@@ -450,6 +414,26 @@ def render_results(results, bias_findings=None, ip_findings=None):
         st.metric("Medium Priority", medium_count)
     with col4:
         st.metric("Low Priority", low_count)
+    
+    # Plagiarism score if available
+    if st.session_state.get('plagiarism_percentage') is not None:
+        plag_pct = st.session_state.get('plagiarism_percentage', 0)
+        if plag_pct >= 60:
+            plag_emoji = "🔴"
+            plag_level = "CRITICAL"
+        elif plag_pct >= 40:
+            plag_emoji = "🟠"
+            plag_level = "HIGH"
+        elif plag_pct >= 20:
+            plag_emoji = "🟡"
+            plag_level = "MEDIUM"
+        elif plag_pct >= 10:
+            plag_emoji = "🟢"
+            plag_level = "LOW"
+        else:
+            plag_emoji = "✅"
+            plag_level = "MINIMAL"
+        st.markdown(f"**{plag_emoji} Plagiarism Score:** {plag_pct}% ({plag_level})")
     
     # Student summary
     st.markdown("### 📝 Summary for Students")
@@ -465,30 +449,30 @@ def render_results(results, bias_findings=None, ip_findings=None):
     # Sort by severity
     sorted_issues = sorted(
         issues, 
-        key=lambda x: {'high': 0, 'medium': 1, 'low': 2}[x['severity']]
+        key=lambda x: {'high': 0, 'medium': 1, 'low': 2}.get(x.get('severity', 'low'), 2)
     )
     
     for idx, issue in enumerate(sorted_issues):
-        severity = issue['severity']
+        severity = issue.get('severity', 'low')
         
         with st.expander(
             f"{'🔴' if severity == 'high' else '🟡' if severity == 'medium' else '🔵'} "
-            f"{issue['title']} [{severity.upper()}]"
+            f"{issue.get('title', 'Issue')} [{severity.upper()}]"
         ):
-            st.markdown(f"**Category:** {issue['category']}")
-            st.markdown(f"**Location:** {issue['location']}")
+            st.markdown(f"**Category:** {issue.get('category', 'N/A')}")
+            st.markdown(f"**Location:** {issue.get('location', 'N/A')}")
             
             st.markdown("**Evidence:**")
-            st.code(issue['evidence'], language=None)
+            st.code(issue.get('evidence', 'N/A'), language=None)
             
             st.markdown("**Recommendation:**")
-            st.write(issue['recommendation'])
+            st.write(issue.get('recommendation', 'N/A'))
             
             if issue.get('suggested_rewrite'):
                 st.markdown("**Suggested Fix:**")
                 st.success(issue['suggested_rewrite'])
                 
-                unique_key = f"copy_{idx}_{issue['category']}_{issue['severity']}"
+                unique_key = f"copy_{idx}_{issue.get('category', 'unknown')}_{severity}"
                 if st.button(f"Copy Fix #{idx+1}", key=unique_key):
                     st.write("✅ Copied to clipboard (simulated)")
     
@@ -587,15 +571,15 @@ def main():
             artifact_type = detect_artifact_type(input_text, uploaded_df)
             
             # Run analysis
-            with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
+            with st.spinner("🔍 Analyzing your project..."):
                 progress = st.progress(0)
                 status = st.empty()
                 
-                # === IP & COPYRIGHT CHECK (NEW) ===
+                # === IP & COPYRIGHT CHECK ===
                 ip_copyright_findings = []
                 if check_options.get('copyright', False):
                     status.text("Running IP & Copyright analysis...")
-                    progress.progress(15)
+                    progress.progress(8)
                     
                     try:
                         ip_result = analyze_ip_copyright(input_text)
@@ -604,26 +588,36 @@ def main():
                     except Exception as e:
                         st.warning(f"IP & Copyright check encountered an error: {str(e)}")
                 
-                # PII detection
-                status.text("Running PII detection...")
-                progress.progress(30)
-                pii_findings = detect_pii(input_text)
+                # === PRIVACY CHECK ===
+                privacy_findings = []
+                if check_options.get('privacy', False):
+                    status.text("Running Privacy & PII analysis...")
+                    progress.progress(18)
+                    
+                    try:
+                        privacy_input_type = "code" if artifact_type == "Code" else "text"
+                        privacy_result = run_privacy_check(input_text, privacy_input_type)
+                        
+                        if privacy_result["status"] == "success":
+                            privacy_findings = privacy_result["findings"]
+                    except Exception as e:
+                        st.warning(f"Privacy check encountered an error: {str(e)}")
                 
                 # Code security
                 status.text("Checking code security...")
-                progress.progress(45)
+                progress.progress(28)
                 code_issues = detect_code_issues(input_text)
                 
                 # Ethical keywords
                 status.text("Scanning for ethical keywords...")
-                progress.progress(60)
+                progress.progress(35)
                 keyword_flags = check_ethical_keywords(input_text)
                 
-                # Bias checking
+                # === BIAS CHECK ===
                 bias_findings = []
                 if check_options.get('bias', False):
                     status.text("Running bias & fairness analysis...")
-                    progress.progress(75)
+                    progress.progress(45)
                     
                     if uploaded_df is not None:
                         bias_result = run_bias_check(uploaded_df, "dataset")
@@ -635,40 +629,80 @@ def main():
                     if bias_result["status"] == "success":
                         bias_findings = bias_result["findings"]
                 
+                # === PLAGIARISM CHECK ===
+                plagiarism_findings = []
+                if check_options.get('plagiarism', False):
+                    status.text("Running plagiarism check (this may take a moment)...")
+                    progress.progress(55)
+                    
+                    try:
+                        # Skip plagiarism check for code
+                        if artifact_type != "Code":
+                            def plag_progress(current, total, phrase):
+                                pct = 55 + int((current / total) * 25)
+                                progress.progress(min(pct, 80))
+                                status.text(f"Checking phrase {current}/{total}...")
+                            
+                            plagiarism_result = run_plagiarism_check(
+                                input_text, 
+                                max_phrases=8,
+                                progress_callback=plag_progress
+                            )
+                            
+                            if plagiarism_result["status"] == "success":
+                                plagiarism_findings = plagiarism_result["findings"]
+                                st.session_state.plagiarism_percentage = plagiarism_result.get("plagiarism_percentage", 0)
+                                st.session_state.plagiarism_sources = plagiarism_result.get("sources", [])
+                        else:
+                            st.info("ℹ️ Plagiarism check skipped for code files")
+                    except Exception as e:
+                        st.warning(f"Plagiarism check encountered an error: {str(e)}")
+                
                 # Main Groq analysis
                 status.text("Running AI analysis...")
-                progress.progress(90)
+                progress.progress(85)
                 results = analyze_with_groq(input_text, artifact_type, check_options, uploaded_df)
                 
                 progress.progress(100)
                 status.text("Analysis complete!")
                 
                 if results:
-                    # === ADD IP & COPYRIGHT FINDINGS ===
+                    # Add IP & Copyright findings
                     if ip_copyright_findings:
                         results['issues'].extend(ip_copyright_findings)
                         high_ip = [f for f in ip_copyright_findings if f['severity'] == 'high']
                         if high_ip and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add bias findings
+                    # Add Privacy findings
+                    if privacy_findings:
+                        results['issues'].extend(privacy_findings)
+                        high_privacy = [f for f in privacy_findings if f['severity'] == 'high']
+                        if high_privacy and results.get('overall_score') != 'high':
+                            results['overall_score'] = 'high'
+                    
+                    # Add Bias findings
                     if bias_findings:
                         results['issues'].extend(bias_findings)
                         high_bias = [f for f in bias_findings if f['severity'] == 'high']
                         if high_bias and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add PII findings
-                    if pii_findings:
-                        results['issues'].insert(0, {
-                            'category': 'Privacy',
-                            'severity': 'high',
-                            'title': 'PII Detected in Document',
-                            'evidence': f"Found {len(pii_findings)} types of PII",
-                            'location': 'Throughout document',
-                            'recommendation': 'Remove or anonymize all personal identifiers',
-                            'suggested_rewrite': 'Replace specific PII with placeholders like [NAME], [EMAIL]'
-                        })
+                    # Add Plagiarism findings
+                    if plagiarism_findings:
+                        results['issues'].extend(plagiarism_findings)
+                        high_plag = [f for f in plagiarism_findings if f['severity'] == 'high']
+                        if high_plag and results.get('overall_score') != 'high':
+                            results['overall_score'] = 'high'
+                    
+                    # Sync plagiarism score with AI detection
+                    # If AI found plagiarism but web search didn't, update the score
+                    ai_plag_issues = [i for i in results.get('issues', []) 
+                                     if i.get('category') == 'Plagiarism' and i.get('severity') == 'high']
+                    current_plag_pct = st.session_state.get('plagiarism_percentage', 0)
+                    if ai_plag_issues and current_plag_pct < 20:
+                        # AI detected plagiarism - set a minimum score
+                        st.session_state.plagiarism_percentage = max(current_plag_pct, 50.0)
                     
                     # Add code security findings
                     if code_issues:
@@ -679,14 +713,16 @@ def main():
                                 'title': issue['type'],
                                 'evidence': f"Detected {issue['count']} occurrence(s)",
                                 'location': 'Code sections',
-                                'recommendation': 'Use environment variables or secure vaults for credentials',
-                                'suggested_rewrite': 'Use: os.getenv("API_KEY") instead of hardcoding'
+                                'recommendation': 'Avoid using dangerous operations that can execute arbitrary code',
+                                'suggested_rewrite': 'Use safer alternatives like subprocess.run() with shell=False'
                             })
                     
                     # Save to session state
                     st.session_state.analysis_results = results
                     st.session_state.bias_findings = bias_findings
                     st.session_state.ip_findings = ip_copyright_findings
+                    st.session_state.privacy_findings = privacy_findings
+                    st.session_state.plagiarism_findings = plagiarism_findings
                     
                     # Clear progress
                     progress.empty()
@@ -701,7 +737,27 @@ def main():
         if st.session_state.analysis_results:
             bias_findings = st.session_state.get('bias_findings', [])
             ip_findings = st.session_state.get('ip_findings', [])
-            render_results(st.session_state.analysis_results, bias_findings, ip_findings)
+            privacy_findings = st.session_state.get('privacy_findings', [])
+            plagiarism_findings = st.session_state.get('plagiarism_findings', [])
+            
+            render_results(
+                st.session_state.analysis_results, 
+                bias_findings, 
+                ip_findings, 
+                privacy_findings,
+                plagiarism_findings
+            )
+            
+            # Show plagiarism sources if available
+            if st.session_state.get('plagiarism_sources'):
+                with st.expander("🌐 Plagiarism Sources Found"):
+                    sources = st.session_state.plagiarism_sources
+                    for i, source in enumerate(sources[:5], 1):
+                        st.markdown(f"**{i}. {source.get('title', 'Unknown Source')[:60]}**")
+                        st.caption(f"URL: {source.get('url', 'N/A')[:80]}")
+                        if source.get('phrases_matched'):
+                            st.caption(f"Matched phrases: {len(source['phrases_matched'])}")
+                        st.markdown("---")
         else:
             st.info("No analysis results yet. Upload and analyze a project first.")
 
