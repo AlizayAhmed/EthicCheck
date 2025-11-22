@@ -79,8 +79,8 @@ st.markdown("""
 # Initialize session state
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
-if 'analysis_history' not in st.session_state:
-    st.session_state.analysis_history = []
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = 0  # Default to Upload tab
 
 # Initialize Groq client
 @st.cache_resource
@@ -228,6 +228,28 @@ def extract_context(text, keyword, window=100):
     end = min(len(text), idx + len(keyword) + window)
     return "..." + text[start:end] + "..."
 
+def detect_artifact_type(text):
+    """Auto-detect project type from content"""
+    text_lower = text.lower()
+    
+    # Check for code indicators
+    code_indicators = ['import ', 'def ', 'class ', 'function ', '#!/usr/bin', 'const ', 'var ', 'let ']
+    if any(indicator in text_lower for indicator in code_indicators):
+        return "Code"
+    
+    # Check for dataset indicators
+    dataset_indicators = ['dataset', 'data collection', 'sample size', 'participants', 'variables']
+    if sum(indicator in text_lower for indicator in dataset_indicators) >= 2:
+        return "Dataset Description"
+    
+    # Check for proposal indicators
+    proposal_indicators = ['abstract', 'introduction', 'methodology', 'objectives', 'research question']
+    if sum(indicator in text_lower for indicator in proposal_indicators) >= 2:
+        return "Proposal"
+    
+    # Default to full report
+    return "Full Report"
+
 # ==================== GROQ API INTEGRATION ====================
 
 def analyze_with_groq(text, artifact_type, check_options):
@@ -317,26 +339,21 @@ ARTIFACT TEXT:
 ANALYSIS FOCUS:
 """
     
+    if check_options.get('copyright', False):
+        prompt += "- Intellectual Property and Copyright issues\n"
     if check_options.get('privacy', False):
         prompt += "- Privacy and PII exposure\n"
     if check_options.get('bias', False):
         prompt += "- Bias and fairness issues\n"
-    if check_options.get('license', False):
-        prompt += "- License compliance\n"
     if check_options.get('plagiarism', False):
-        prompt += "- Potential plagiarism\n"
-    if check_options.get('security', False):
-        prompt += "- Security vulnerabilities\n"
-    if check_options.get('harmful', False):
-        prompt += "- Harmful use cases\n"
+        prompt += "- Potential plagiarism and attribution\n"
     
     prompt += """
 POLICY RULES:
+- Copyright: Using copyrighted material without permission = HIGH severity
 - Privacy: Personal data without consent = HIGH severity
 - Bias: Underrepresented groups in datasets = MEDIUM severity
-- License: Using incompatible licenses = MEDIUM severity
-- Harmful use: Enabling illegal/harmful activities = HIGH severity
-- Security: Exposed credentials or dangerous operations = HIGH severity
+- Plagiarism: Unattributed work or high similarity = HIGH severity
 
 Output valid JSON only. Be specific with evidence and provide actionable recommendations.
 """
@@ -468,13 +485,8 @@ def render_results(results):
     
     # Export options
     st.markdown("### 💾 Export")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📄 Export PDF Report"):
-            st.info("PDF export functionality coming soon!")
-    with col2:
-        if st.button("📧 Email to Instructor"):
-            st.info("Email functionality coming soon!")
+    if st.button("📄 Export PDF Report", use_container_width=True):
+        st.info("PDF export functionality coming soon!")
 
 # ==================== MAIN APP ====================
 
@@ -485,29 +497,56 @@ def main():
     with st.sidebar:
         st.markdown("### ℹ️ About EthicCheck")
         st.write("""
-        EthicCheck analyzes student projects for:
-        - 🔒 Privacy violations
-        - ⚖️ Bias and fairness issues
-        - 📜 License compliance
-        - 🔍 Plagiarism indicators
-        - 🛡️ Security vulnerabilities
-        - ⚠️ Harmful use cases
+        **AI-Powered Ethical Analysis Tool**
+        
+        EthicCheck helps students and educators identify potential ethical issues in academic projects.
+        
+        **Analysis Categories:**
+        - 📜 IP & Copyright Compliance
+        - 🔒 Privacy & Data Protection
+        - ⚖️ Bias & Fairness Assessment
+        - 🔍 Plagiarism Detection
         """)
         
         st.markdown("---")
-        st.markdown("### 🔐 Privacy")
-        st.write("Data processed ephemerally. No permanent storage.")
+        st.markdown("### 🎯 How It Works")
+        st.write("""
+        1. Upload your project or paste text
+        2. Select analysis options
+        3. Get instant AI-powered feedback
+        4. Review issues and apply fixes
+        """)
         
         st.markdown("---")
-        if st.button("🗑️ Clear Results"):
-            st.session_state.analysis_results = None
-            st.rerun()
+        st.markdown("### 🔐 Privacy & Security")
+        st.write("""
+        - ✅ Ephemeral processing
+        - ✅ No permanent storage
+        - ✅ FERPA compliant
+        - ✅ Powered by Groq AI
+        """)
+        
+        st.markdown("---")
+        st.markdown("### 💡 Tips")
+        st.write("""
+        - Use copy-paste for best results
+        - Review all high-priority issues
+        - Apply suggested fixes
+        - Re-analyze after changes
+        """)
     
     # Main content
-    tabs = st.tabs(["📤 Upload & Analyze", "📊 Results", "📚 History"])
+    tab1, tab2 = st.tabs(["📤 Upload & Analyze", "📊 Results"])
     
-    with tabs[0]:
-        uploaded_file, text_input, git_url, artifact_type, check_options = render_upload_section()
+    # Manage active tab
+    if st.session_state.active_tab == 1 and st.session_state.analysis_results:
+        # Show results tab by default after analysis
+        active_container = tab2
+    else:
+        active_container = tab1
+    
+    with tab1:
+        uploaded_file, text_input, git_url, check_options = render_upload_section()
         
         if st.button("🚀 Analyze Project", type="primary"):
             # Get input text
@@ -530,6 +569,10 @@ def main():
             if not input_text or len(input_text) < 50:
                 st.error("Input text is too short. Please provide more content.")
                 return
+            
+            # Auto-detect project type
+            artifact_type = detect_artifact_type(input_text)
+            st.info(f"🤖 Detected project type: **{artifact_type}**")
             
             # Run analysis
             with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
@@ -584,13 +627,9 @@ def main():
                             })
                     
                     st.session_state.analysis_results = results
-                    st.session_state.analysis_history.append({
-                        'timestamp': datetime.now(),
-                        'artifact_type': artifact_type,
-                        'results': results
-                    })
-                    
-                    st.success("✅ Analysis complete! Switch to Results tab.")
+                    st.session_state.active_tab = 1  # Set to Results tab (index 1)
+                    st.success("✅ Analysis complete! Redirecting to results...")
+                    st.rerun()  # Refresh to switch tabs
                 else:
                     st.error("Analysis failed. Please check your Groq API key and try again.")
     
@@ -600,18 +639,6 @@ def main():
         else:
             st.info("No analysis results yet. Upload and analyze a project first.")
     
-    with tabs[2]:
-        if st.session_state.analysis_history:
-            st.markdown("### 📚 Analysis History")
-            for idx, entry in enumerate(reversed(st.session_state.analysis_history)):
-                with st.expander(f"Analysis {len(st.session_state.analysis_history) - idx} - {entry['timestamp'].strftime('%Y-%m-%d %H:%M')}"):
-                    st.write(f"**Type:** {entry['artifact_type']}")
-                    st.write(f"**Issues Found:** {len(entry['results'].get('issues', []))}")
-                    if st.button(f"View Details #{idx}", key=f"history_{idx}"):
-                        st.session_state.analysis_results = entry['results']
-                        st.rerun()
-        else:
-            st.info("No analysis history yet.")
 
 if __name__ == "__main__":
     main()
