@@ -626,7 +626,7 @@ def main():
                 else:
                     st.error("Analysis failed. Please check your Groq API key and try again.")
     
-    with tabs[1]:
+    with tab2:
         if st.session_state.analysis_results:
             render_results(st.session_state.analysis_results)
         else:
