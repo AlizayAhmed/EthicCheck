@@ -528,15 +528,8 @@ def main():
         - Re-analyze after changes
         """)
     
-    # Main content
+# Main content
     tab1, tab2 = st.tabs(["📤 Upload & Analyze", "📊 Results"])
-    
-    # Manage active tab
-    if st.session_state.active_tab == 1 and st.session_state.analysis_results:
-        # Show results tab by default after analysis
-        active_container = tab2
-    else:
-        active_container = tab1
     
     with tab1:
         uploaded_file, text_input, git_url, check_options = render_upload_section()
@@ -620,9 +613,11 @@ def main():
                             })
                     
                     st.session_state.analysis_results = results
-                    st.session_state.active_tab = 1  # Set to Results tab (index 1)
-                    st.success("✅ Analysis complete! Redirecting to results...")
-                    st.rerun()  # Refresh to switch tabs
+                    st.balloons()
+                    st.success("✅ Analysis complete!")
+                    st.markdown("---")
+                    st.markdown("## 📊 Analysis Results")
+                    render_results(results)
                 else:
                     st.error("Analysis failed. Please check your Groq API key and try again.")
     
