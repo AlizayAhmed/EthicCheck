@@ -389,6 +389,11 @@ def render_upload_section():
             type=['txt', 'pdf', 'py', 'md', 'ipynb'],
             help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks"
         )
+
+        # Debug: Show if file was uploaded
+        if uploaded_file is not None:
+            st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size} bytes)")
+
         
         # Text input
         text_input = st.text_area(
