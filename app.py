@@ -15,12 +15,19 @@ import PyPDF2
 import io
 from dotenv import load_dotenv
 import pandas as pd
-# ==================== BIAS IMPORTS ====================
+
+# ==================== CUSTOM MODULE IMPORTS ====================
 from bias_fairness_checker import (
     run_bias_check, 
     generate_bias_summary,
     parse_uploaded_dataset
 )
+
+from ip_copyright_checker import (
+    analyze_ip_copyright,
+    generate_ip_summary
+)
+
 # ==================== CONFIGURATION ====================
 
 # Page configuration
@@ -87,7 +94,7 @@ st.markdown("""
 if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'active_tab' not in st.session_state:
-    st.session_state.active_tab = 0  # Default to Upload tab
+    st.session_state.active_tab = 0
 
 # Initialize Groq client
 @st.cache_resource
@@ -236,7 +243,6 @@ def extract_context(text, keyword, window=100):
 
 def detect_artifact_type(text, uploaded_df=None):
     """Auto-detect project type from content"""
-    # If it's a dataset
     if uploaded_df is not None:
         return "Dataset Description"
     
@@ -257,7 +263,6 @@ def detect_artifact_type(text, uploaded_df=None):
     if sum(indicator in text_lower for indicator in proposal_indicators) >= 2:
         return "Proposal"
     
-    # Default to full report
     return "Full Report"
 
 # ==================== GROQ API INTEGRATION ====================
@@ -273,7 +278,7 @@ def analyze_with_groq(text, artifact_type, check_options, uploaded_df=None):
     
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",  # or mixtral-8x7b-32768
+            model="llama-3.3-70b-versatile",
             messages=[
                 {
                     "role": "system",
@@ -310,7 +315,6 @@ def analyze_with_groq(text, artifact_type, check_options, uploaded_df=None):
         
         # Try to parse JSON
         try:
-            # Extract JSON if wrapped in markdown
             if "```json" in result:
                 result = result.split("```json")[1].split("```")[0]
             elif "```" in result:
@@ -318,7 +322,6 @@ def analyze_with_groq(text, artifact_type, check_options, uploaded_df=None):
             
             return json.loads(result)
         except json.JSONDecodeError:
-            # If JSON parsing fails, create structured response
             return {
                 "overall_score": "medium",
                 "issues": [{
@@ -344,7 +347,7 @@ def build_analysis_prompt(text, artifact_type, check_options):
     prompt = f"""Analyze the following {artifact_type} for ethical concerns.
 
 ARTIFACT TEXT:
-{text[:4000]}  # Limit to avoid token limits
+{text[:4000]}
 
 ANALYSIS FOCUS:
 """
@@ -393,26 +396,21 @@ def render_upload_section():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # File upload - ADD CSV/EXCEL SUPPORT
         uploaded_file = st.file_uploader(
             "Upload document or code",
             type=['txt', 'pdf', 'py', 'md', 'ipynb', 'csv', 'xlsx'],
             help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks, CSV, Excel"
         )
 
-        # Debug: Show if file was uploaded
         if uploaded_file is not None:
             st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size} bytes)")
-
         
-        # Text input
         text_input = st.text_area(
             "Or paste your content here",
             height=200,
             placeholder="Paste your project proposal, code, or methodology..."
         )
         
-        # Git URL input
         git_url = st.text_input(
             "Or enter Git repository URL",
             placeholder="https://github.com/username/repo"
@@ -429,7 +427,7 @@ def render_upload_section():
     
     return uploaded_file, text_input, git_url, check_options
 
-def render_results(results, bias_findings=None):
+def render_results(results, bias_findings=None, ip_findings=None):
     """Render analysis results"""
     if not results:
         return
@@ -585,33 +583,47 @@ def main():
                 st.error("Input text is too short. Please provide more content.")
                 return
             
-            # ========== AUTO-DETECT ARTIFACT TYPE ==========
+            # Auto-detect artifact type
             artifact_type = detect_artifact_type(input_text, uploaded_df)
-#            st.info(f"📋 Detected project type: **{artifact_type}**")
             
             # Run analysis
             with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
                 progress = st.progress(0)
                 status = st.empty()
                 
-                # Deterministic checks
+                # === IP & COPYRIGHT CHECK (NEW) ===
+                ip_copyright_findings = []
+                if check_options.get('copyright', False):
+                    status.text("Running IP & Copyright analysis...")
+                    progress.progress(15)
+                    
+                    try:
+                        ip_result = analyze_ip_copyright(input_text)
+                        if ip_result["status"] == "success":
+                            ip_copyright_findings = ip_result["findings"]
+                    except Exception as e:
+                        st.warning(f"IP & Copyright check encountered an error: {str(e)}")
+                
+                # PII detection
                 status.text("Running PII detection...")
-                progress.progress(15)
+                progress.progress(30)
                 pii_findings = detect_pii(input_text)
                 
+                # Code security
                 status.text("Checking code security...")
-                progress.progress(30)
+                progress.progress(45)
                 code_issues = detect_code_issues(input_text)
                 
+                # Ethical keywords
                 status.text("Scanning for ethical keywords...")
-                progress.progress(45)
+                progress.progress(60)
                 keyword_flags = check_ethical_keywords(input_text)
                 
-                # NEW: Bias checking
+                # Bias checking
                 bias_findings = []
                 if check_options.get('bias', False):
                     status.text("Running bias & fairness analysis...")
-                    progress.progress(60)
+                    progress.progress(75)
                     
                     if uploaded_df is not None:
                         bias_result = run_bias_check(uploaded_df, "dataset")
@@ -623,16 +635,22 @@ def main():
                     if bias_result["status"] == "success":
                         bias_findings = bias_result["findings"]
                 
-                status.text("Running AI analysis...")
-                progress.progress(80)
-                
                 # Main Groq analysis
+                status.text("Running AI analysis...")
+                progress.progress(90)
                 results = analyze_with_groq(input_text, artifact_type, check_options, uploaded_df)
                 
                 progress.progress(100)
                 status.text("Analysis complete!")
                 
                 if results:
+                    # === ADD IP & COPYRIGHT FINDINGS ===
+                    if ip_copyright_findings:
+                        results['issues'].extend(ip_copyright_findings)
+                        high_ip = [f for f in ip_copyright_findings if f['severity'] == 'high']
+                        if high_ip and results.get('overall_score') != 'high':
+                            results['overall_score'] = 'high'
+                    
                     # Add bias findings
                     if bias_findings:
                         results['issues'].extend(bias_findings)
@@ -640,7 +658,7 @@ def main():
                         if high_bias and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add other deterministic findings
+                    # Add PII findings
                     if pii_findings:
                         results['issues'].insert(0, {
                             'category': 'Privacy',
@@ -651,7 +669,8 @@ def main():
                             'recommendation': 'Remove or anonymize all personal identifiers',
                             'suggested_rewrite': 'Replace specific PII with placeholders like [NAME], [EMAIL]'
                         })
-                                                      
+                    
+                    # Add code security findings
                     if code_issues:
                         for issue in code_issues:
                             results['issues'].append({
@@ -664,15 +683,15 @@ def main():
                                 'suggested_rewrite': 'Use: os.getenv("API_KEY") instead of hardcoding'
                             })
                     
-                    # Save results to session state
+                    # Save to session state
                     st.session_state.analysis_results = results
-                    st.session_state.bias_findings = bias_findings  # Store bias findings separately
+                    st.session_state.bias_findings = bias_findings
+                    st.session_state.ip_findings = ip_copyright_findings
                     
-                    # Clear progress indicators
+                    # Clear progress
                     progress.empty()
                     status.empty()
                     
-                    # Show success with animation
                     st.balloons()
                     st.success("✅ Analysis complete! Switch to the **Results** tab to view your report ➡️")
                 else:
@@ -681,10 +700,10 @@ def main():
     with tab2:
         if st.session_state.analysis_results:
             bias_findings = st.session_state.get('bias_findings', [])
-            render_results(st.session_state.analysis_results, bias_findings)
+            ip_findings = st.session_state.get('ip_findings', [])
+            render_results(st.session_state.analysis_results, bias_findings, ip_findings)
         else:
             st.info("No analysis results yet. Upload and analyze a project first.")
-    
 
 if __name__ == "__main__":
     main()
