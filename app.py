@@ -14,6 +14,13 @@ from datetime import datetime
 import PyPDF2
 import io
 from dotenv import load_dotenv
+import pandas as pd
+# ==================== BIAS IMPORTS ====================
+from bias_fairness_checker import (
+    run_bias_check, 
+    generate_bias_summary,
+    parse_uploaded_dataset
+)
 # ==================== CONFIGURATION ====================
 
 # Page configuration
@@ -90,7 +97,6 @@ def init_groq_client():
         api_key = st.secrets.get("GROQ_API_KEY", "")
     except:
         api_key = os.getenv("GROQ_API_KEY", "")
-#    api_key = os.getenv("GROQ_API_KEY", "")
     if not api_key:
         st.warning("⚠️ Please set your GROQ_API_KEY environment variable")
         return None
@@ -228,8 +234,12 @@ def extract_context(text, keyword, window=100):
     end = min(len(text), idx + len(keyword) + window)
     return "..." + text[start:end] + "..."
 
-def detect_artifact_type(text):
+def detect_artifact_type(text, uploaded_df=None):
     """Auto-detect project type from content"""
+    # If it's a dataset
+    if uploaded_df is not None:
+        return "Dataset Description"
+    
     text_lower = text.lower()
     
     # Check for code indicators
@@ -252,7 +262,7 @@ def detect_artifact_type(text):
 
 # ==================== GROQ API INTEGRATION ====================
 
-def analyze_with_groq(text, artifact_type, check_options):
+def analyze_with_groq(text, artifact_type, check_options, uploaded_df=None):
     """Main analysis function using Groq API"""
     
     if not groq_client:
@@ -383,11 +393,11 @@ def render_upload_section():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        # File upload
+        # File upload - ADD CSV/EXCEL SUPPORT
         uploaded_file = st.file_uploader(
             "Upload document or code",
-            type=['txt', 'pdf', 'py', 'md', 'ipynb'],
-            help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks"
+            type=['txt', 'pdf', 'py', 'md', 'ipynb', 'csv', 'xlsx'],
+            help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks, CSV, Excel"
         )
 
         # Debug: Show if file was uploaded
@@ -417,9 +427,9 @@ def render_upload_section():
             'plagiarism': st.checkbox("Plagiarism Check", value=True)
         }
     
-    return uploaded_file, text_input, git_url, check_options  # ← MUST RETURN 4 VALUES
+    return uploaded_file, text_input, git_url, check_options
 
-def render_results(results):
+def render_results(results, bias_findings=None):
     """Render analysis results"""
     if not results:
         return
@@ -455,13 +465,18 @@ def render_results(results):
         return
     
     # Sort by severity
-    sorted_issues = sorted(issues, key=lambda x: {'high': 0, 'medium': 1, 'low': 2}[x['severity']])
+    sorted_issues = sorted(
+        issues, 
+        key=lambda x: {'high': 0, 'medium': 1, 'low': 2}[x['severity']]
+    )
     
     for idx, issue in enumerate(sorted_issues):
         severity = issue['severity']
-        card_class = f"issue-card-{severity}"
         
-        with st.expander(f"{'🔴' if severity == 'high' else '🟡' if severity == 'medium' else '🔵'} {issue['title']} [{severity.upper()}]"):
+        with st.expander(
+            f"{'🔴' if severity == 'high' else '🟡' if severity == 'medium' else '🔵'} "
+            f"{issue['title']} [{severity.upper()}]"
+        ):
             st.markdown(f"**Category:** {issue['category']}")
             st.markdown(f"**Location:** {issue['location']}")
             
@@ -474,7 +489,7 @@ def render_results(results):
             if issue.get('suggested_rewrite'):
                 st.markdown("**Suggested Fix:**")
                 st.success(issue['suggested_rewrite'])
-                # Use unique key based on issue content
+                
                 unique_key = f"copy_{idx}_{issue['category']}_{issue['severity']}"
                 if st.button(f"Copy Fix #{idx+1}", key=unique_key):
                     st.write("✅ Copied to clipboard (simulated)")
@@ -535,19 +550,26 @@ def main():
         - Re-analyze after changes
         """)
     
-# Main content
+    # Main content
     tab1, tab2 = st.tabs(["📤 Upload & Analyze", "📊 Results"])
     
     with tab1:
         uploaded_file, text_input, git_url, check_options = render_upload_section()
         
         if st.button("🚀 Analyze Project", type="primary"):
-            # Get input text
+            # Get input text and dataset
             input_text = ""
+            uploaded_df = None
             
             if uploaded_file:
                 if uploaded_file.type == "application/pdf":
                     input_text = extract_text_from_pdf(uploaded_file)
+                elif uploaded_file.type == "text/csv":
+                    uploaded_df = pd.read_csv(uploaded_file)
+                    input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
+                elif uploaded_file.type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
+                    uploaded_df = pd.read_excel(uploaded_file)
+                    input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
                 else:
                     input_text = uploaded_file.read().decode('utf-8')
             elif text_input:
@@ -563,38 +585,62 @@ def main():
                 st.error("Input text is too short. Please provide more content.")
                 return
             
-            # Auto-detect project type (silent - no message to user)
-            artifact_type = detect_artifact_type(input_text)
+            # ========== AUTO-DETECT ARTIFACT TYPE ==========
+            artifact_type = detect_artifact_type(input_text, uploaded_df)
+#            st.info(f"📋 Detected project type: **{artifact_type}**")
             
             # Run analysis
             with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
-                # Deterministic checks
                 progress = st.progress(0)
                 status = st.empty()
                 
+                # Deterministic checks
                 status.text("Running PII detection...")
-                progress.progress(20)
+                progress.progress(15)
                 pii_findings = detect_pii(input_text)
                 
                 status.text("Checking code security...")
-                progress.progress(40)
+                progress.progress(30)
                 code_issues = detect_code_issues(input_text)
                 
                 status.text("Scanning for ethical keywords...")
-                progress.progress(60)
+                progress.progress(45)
                 keyword_flags = check_ethical_keywords(input_text)
+                
+                # NEW: Bias checking
+                bias_findings = []
+                if check_options.get('bias', False):
+                    status.text("Running bias & fairness analysis...")
+                    progress.progress(60)
+                    
+                    if uploaded_df is not None:
+                        bias_result = run_bias_check(uploaded_df, "dataset")
+                    elif artifact_type == "Code":
+                        bias_result = run_bias_check(input_text, "code")
+                    else:
+                        bias_result = run_bias_check(input_text, "text")
+                    
+                    if bias_result["status"] == "success":
+                        bias_findings = bias_result["findings"]
                 
                 status.text("Running AI analysis...")
                 progress.progress(80)
                 
                 # Main Groq analysis
-                results = analyze_with_groq(input_text, artifact_type, check_options)
+                results = analyze_with_groq(input_text, artifact_type, check_options, uploaded_df)
                 
                 progress.progress(100)
                 status.text("Analysis complete!")
                 
                 if results:
-                    # Enhance results with deterministic findings
+                    # Add bias findings
+                    if bias_findings:
+                        results['issues'].extend(bias_findings)
+                        high_bias = [f for f in bias_findings if f['severity'] == 'high']
+                        if high_bias and results.get('overall_score') != 'high':
+                            results['overall_score'] = 'high'
+                    
+                    # Add other deterministic findings
                     if pii_findings:
                         results['issues'].insert(0, {
                             'category': 'Privacy',
@@ -605,7 +651,7 @@ def main():
                             'recommendation': 'Remove or anonymize all personal identifiers',
                             'suggested_rewrite': 'Replace specific PII with placeholders like [NAME], [EMAIL]'
                         })
-                    
+                                                      
                     if code_issues:
                         for issue in code_issues:
                             results['issues'].append({
@@ -620,6 +666,7 @@ def main():
                     
                     # Save results to session state
                     st.session_state.analysis_results = results
+                    st.session_state.bias_findings = bias_findings  # Store bias findings separately
                     
                     # Clear progress indicators
                     progress.empty()
@@ -633,7 +680,8 @@ def main():
                     
     with tab2:
         if st.session_state.analysis_results:
-            render_results(st.session_state.analysis_results)
+            bias_findings = st.session_state.get('bias_findings', [])
+            render_results(st.session_state.analysis_results, bias_findings)
         else:
             st.info("No analysis results yet. Upload and analyze a project first.")
     
