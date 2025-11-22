@@ -404,22 +404,15 @@ def render_upload_section():
         )
     
     with col2:
-        artifact_type = st.selectbox(
-            "Project Type",
-            ["Proposal", "Code", "Dataset Description", "Full Report"]
-        )
-        
         st.markdown("### Analysis Options")
         check_options = {
-            'privacy': st.checkbox("Privacy & PII", value=True),
+            'copyright': st.checkbox("IP & Copyright", value=True),
+            'privacy': st.checkbox("Privacy Check", value=True),
             'bias': st.checkbox("Bias & Fairness", value=True),
-            'license': st.checkbox("License Compliance", value=True),
-            'plagiarism': st.checkbox("Plagiarism Check", value=True),
-            'security': st.checkbox("Security Issues", value=True),
-            'harmful': st.checkbox("Harmful Use Detection", value=True)
+            'plagiarism': st.checkbox("Plagiarism Check", value=True)
         }
     
-    return uploaded_file, text_input, git_url, artifact_type, check_options
+    return uploaded_file, text_input, git_url, check_options  # ← MUST RETURN 4 VALUES
 
 def render_results(results):
     """Render analysis results"""
