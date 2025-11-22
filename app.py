@@ -469,7 +469,9 @@ def render_results(results):
             if issue.get('suggested_rewrite'):
                 st.markdown("**Suggested Fix:**")
                 st.success(issue['suggested_rewrite'])
-                if st.button(f"Copy Fix #{idx+1}", key=f"copy_{idx}"):
+                # Use unique key based on issue content
+                unique_key = f"copy_{idx}_{issue['category']}_{issue['severity']}"
+                if st.button(f"Copy Fix #{idx+1}", key=unique_key):
                     st.write("✅ Copied to clipboard (simulated)")
     
     # Instructor notes
@@ -556,9 +558,8 @@ def main():
                 st.error("Input text is too short. Please provide more content.")
                 return
             
-            # Auto-detect project type
+            # Auto-detect project type (silent - no message to user)
             artifact_type = detect_artifact_type(input_text)
-            st.info(f"🤖 Detected project type: **{artifact_type}**")
             
             # Run analysis
             with st.spinner("🔍 Analyzing your project... This may take 30-60 seconds"):
@@ -612,15 +613,19 @@ def main():
                                 'suggested_rewrite': 'Use: os.getenv("API_KEY") instead of hardcoding'
                             })
                     
+                    # Save results to session state
                     st.session_state.analysis_results = results
+                    
+                    # Clear progress indicators
+                    progress.empty()
+                    status.empty()
+                    
+                    # Show success with animation
                     st.balloons()
-                    st.success("✅ Analysis complete!")
-                    st.markdown("---")
-                    st.markdown("## 📊 Analysis Results")
-                    render_results(results)
+                    st.success("✅ Analysis complete! Switch to the **Results** tab to view your report ➡️")
                 else:
                     st.error("Analysis failed. Please check your Groq API key and try again.")
-    
+                    
     with tab2:
         if st.session_state.analysis_results:
             render_results(st.session_state.analysis_results)
