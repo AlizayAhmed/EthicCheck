@@ -1,6 +1,6 @@
 """
 EthicCheck - AI-Powered Ethical Analysis for Student Projects
-Complete Streamlit Application with Groq API Integration
+Complete Streamlit Application with Groq API Integration + GitHub Analysis
 """
 
 import streamlit as st
@@ -15,6 +15,7 @@ import PyPDF2
 import io
 from dotenv import load_dotenv
 import pandas as pd
+from fpdf import FPDF
 
 # ==================== CUSTOM MODULE IMPORTS ====================
 from bias_fairness_checker import (
@@ -36,6 +37,12 @@ from privacy_checker import (
 from plagiarism_checker import (
     run_plagiarism_check,
     generate_plagiarism_summary
+)
+
+from github_analyzer import (
+    analyze_github_repository,
+    is_valid_github_url,
+    format_repo_info_display
 )
 
 # ==================== CONFIGURATION ====================
@@ -95,6 +102,13 @@ st.markdown("""
         font-weight: 600;
         border-radius: 8px;
     }
+    .repo-info-box {
+        background: #f8f9fa;
+        border-left: 4px solid #667eea;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -105,6 +119,8 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'active_tab' not in st.session_state:
     st.session_state.active_tab = 0
+if 'repo_info' not in st.session_state:
+    st.session_state.repo_info = None
 
 # Initialize Groq client
 @st.cache_resource
@@ -224,6 +240,208 @@ def detect_artifact_type(text, uploaded_df=None):
         return "Proposal"
     
     return "Full Report"
+
+# ==================== PDF EXPORT FUNCTION ====================
+
+def clean_text_for_pdf(text):
+    """Clean text to remove characters not supported by latin-1 encoding."""
+    if not text:
+        return ""
+    
+    # Replace common unicode characters with ASCII equivalents
+    replacements = {
+        '\u2013': '-',  # en dash
+        '\u2014': '--',  # em dash
+        '\u2018': "'",  # left single quote
+        '\u2019': "'",  # right single quote
+        '\u201c': '"',  # left double quote
+        '\u201d': '"',  # right double quote
+        '\u2022': '*',  # bullet
+        '\u2026': '...',  # ellipsis
+        '\u00a0': ' ',  # non-breaking space
+        '\u2192': '->',  # right arrow
+        '\u00b7': '*',  # middle dot
+        '\u25aa': '*',  # small square
+        '\u2022': '*',  # bullet point
+    }
+    
+    for unicode_char, ascii_char in replacements.items():
+        text = text.replace(unicode_char, ascii_char)
+    
+    # Remove any remaining non-latin-1 characters
+    text = text.encode('latin-1', errors='ignore').decode('latin-1')
+    
+    return text
+
+def generate_pdf_report(results, bias_findings, ip_findings, privacy_findings, plagiarism_findings):
+    """Generate PDF report of analysis results."""
+    
+    class PDF(FPDF):
+        def header(self):
+            self.set_font('Arial', 'B', 16)
+            self.set_fill_color(102, 126, 234)
+            self.set_text_color(255, 255, 255)
+            self.cell(0, 15, 'EthicCheck Analysis Report', 0, 1, 'C', fill=True)
+            self.ln(5)
+        
+        def footer(self):
+            self.set_y(-15)
+            self.set_font('Arial', 'I', 8)
+            self.set_text_color(128)
+            self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+        
+        def chapter_title(self, title):
+            self.set_font('Arial', 'B', 14)
+            self.set_fill_color(240, 240, 240)
+            title = clean_text_for_pdf(title)
+            self.cell(0, 10, title, 0, 1, 'L', fill=True)
+            self.ln(2)
+        
+        def chapter_body(self, body):
+            self.set_font('Arial', '', 11)
+            body = clean_text_for_pdf(body)
+            self.multi_cell(0, 6, body)
+            self.ln()
+    
+    pdf = PDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    
+    # Report metadata
+    pdf.set_font('Arial', '', 10)
+    pdf.set_text_color(100)
+    pdf.cell(0, 6, f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}', 0, 1)
+    pdf.cell(0, 6, 'Powered by EthicCheck - AI Ethics Analyzer', 0, 1)
+    pdf.ln(5)
+    
+    # Overall Summary
+    pdf.chapter_title('Overall Analysis Summary')
+    issues = results.get('issues', [])
+    high_count = len([i for i in issues if i.get('severity') == 'high'])
+    medium_count = len([i for i in issues if i.get('severity') == 'medium'])
+    low_count = len([i for i in issues if i.get('severity') == 'low'])
+    
+    summary_text = f"Overall Risk Level: {results.get('overall_score', 'N/A').upper()}\n"
+    summary_text += f"Total Issues Found: {len(issues)}\n"
+    summary_text += f"  - High Priority: {high_count}\n"
+    summary_text += f"  - Medium Priority: {medium_count}\n"
+    summary_text += f"  - Low Priority: {low_count}\n"
+    
+    if st.session_state.get('plagiarism_percentage') is not None:
+        plag_pct = st.session_state.get('plagiarism_percentage', 0)
+        summary_text += f"\nPlagiarism Score: {plag_pct}%\n"
+    
+    pdf.chapter_body(summary_text)
+    
+    # Student Summary
+    pdf.chapter_title('Summary for Students')
+    student_summary = results.get('student_summary', 'No summary available')
+    pdf.chapter_body(student_summary)
+    
+    # Detailed Issues
+    pdf.chapter_title('Detailed Issues')
+    
+    if not issues:
+        pdf.chapter_body('No significant ethical issues detected!')
+    else:
+        # Sort by severity
+        sorted_issues = sorted(
+            issues, 
+            key=lambda x: {'high': 0, 'medium': 1, 'low': 2}.get(x.get('severity', 'low'), 2)
+        )
+        
+        for idx, issue in enumerate(sorted_issues, 1):
+            severity = issue.get('severity', 'low')
+            severity_icon = {'high': '[HIGH]', 'medium': '[MEDIUM]', 'low': '[LOW]'}.get(severity, '[INFO]')
+            
+            pdf.set_font('Arial', 'B', 12)
+            pdf.set_text_color(0)
+            issue_title = clean_text_for_pdf(issue.get('title', 'Issue'))
+            pdf.cell(0, 8, f"{idx}. {severity_icon} {issue_title}", 0, 1)
+            
+            pdf.set_font('Arial', '', 10)
+            pdf.set_text_color(50)
+            
+            # Category and Location
+            category = clean_text_for_pdf(issue.get('category', 'N/A'))
+            location = clean_text_for_pdf(issue.get('location', 'N/A'))
+            pdf.cell(0, 6, f"Category: {category}", 0, 1)
+            pdf.cell(0, 6, f"Location: {location}", 0, 1)
+            
+            # Evidence
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(0, 6, 'Evidence:', 0, 1)
+            pdf.set_font('Arial', '', 9)
+            evidence = clean_text_for_pdf(issue.get('evidence', 'N/A'))
+            if len(evidence) > 300:
+                evidence = evidence[:300] + '...'
+            pdf.multi_cell(0, 5, evidence)
+            
+            # Recommendation
+            pdf.set_font('Arial', 'B', 10)
+            pdf.cell(0, 6, 'Recommendation:', 0, 1)
+            pdf.set_font('Arial', '', 9)
+            recommendation = clean_text_for_pdf(issue.get('recommendation', 'N/A'))
+            pdf.multi_cell(0, 5, recommendation)
+            
+            # Suggested Fix
+            suggested_fix = issue.get('suggested_rewrite')
+            if not suggested_fix and issue.get('category') == 'IP & Copyright':
+                suggested_fix = generate_ip_fix_with_groq(issue)
+            
+            if suggested_fix:
+                pdf.set_font('Arial', 'B', 10)
+                pdf.cell(0, 6, 'Suggested Fix:', 0, 1)
+                pdf.set_font('Arial', '', 9)
+                suggested_fix = clean_text_for_pdf(suggested_fix)
+                if len(suggested_fix) > 300:
+                    suggested_fix = suggested_fix[:300] + '...'
+                pdf.multi_cell(0, 5, suggested_fix)
+            
+            pdf.ln(3)
+            pdf.set_draw_color(200)
+            pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+            pdf.ln(3)
+    
+    # Instructor Notes
+    pdf.add_page()
+    pdf.chapter_title('Instructor Notes')
+    instructor_notes = clean_text_for_pdf(results.get('instructor_notes', 'No additional notes'))
+    pdf.chapter_body(instructor_notes)
+    
+    # Generate PDF in memory
+    pdf_output = pdf.output(dest='S').encode('latin-1')
+    return pdf_output
+
+# ==================== GROQ FIX GENERATION ====================
+
+def generate_ip_fix_with_groq(issue: dict) -> str:
+    """Generate AI-powered fix suggestions for IP & Copyright issues using Groq."""
+    if not groq_client:
+        return "Enable Groq API for AI-powered fix suggestions."
+    
+    try:
+        prompt = f"""You are an IP & Copyright compliance expert. Suggest a specific fix for this issue:
+
+Issue: {issue.get('title', 'Unknown Issue')}
+Evidence: {issue.get('evidence', 'No evidence provided')}
+Current Recommendation: {issue.get('recommendation', 'No recommendation')}
+
+Provide a concrete, actionable fix in 2-3 sentences. Be specific about what the student should do."""
+
+        response = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a helpful IP & Copyright compliance assistant. Provide clear, actionable advice."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3,
+            max_tokens=200
+        )
+        
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error generating fix: {str(e)}"
 
 # ==================== GROQ API INTEGRATION ====================
 
@@ -372,9 +590,14 @@ def render_upload_section():
         )
         
         git_url = st.text_input(
-            "Or enter Git repository URL",
-            placeholder="https://github.com/username/repo"
+            "Or enter GitHub repository URL",
+            placeholder="https://github.com/username/repo",
+            help="Enter a public GitHub repository URL. Max size: 50MB, 500 files"
         )
+        
+        # Show URL validation
+        if git_url and not is_valid_github_url(git_url):
+            st.warning("⚠️ Invalid GitHub URL format. Use: https://github.com/user/repo")
     
     with col2:
         st.markdown("### Analysis Options")
@@ -385,9 +608,12 @@ def render_upload_section():
             'plagiarism': st.checkbox("Plagiarism Check", value=True)
         }
         
-        # Plagiarism check warning
+        # Warnings
         if check_options['plagiarism']:
             st.caption("⏱️ Plagiarism check may take 20-40 seconds")
+        
+        if git_url:
+            st.caption("📦 Repository analysis includes all code files")
     
     return uploaded_file, text_input, git_url, check_options
 
@@ -395,6 +621,8 @@ def render_results(results, bias_findings=None, ip_findings=None, privacy_findin
     """Render analysis results"""
     if not results:
         return
+    
+    # REMOVED: Repository Information section
     
     # Overall metrics
     st.markdown("### 📊 Analysis Summary")
@@ -468,9 +696,15 @@ def render_results(results, bias_findings=None, ip_findings=None, privacy_findin
             st.markdown("**Recommendation:**")
             st.write(issue.get('recommendation', 'N/A'))
             
-            if issue.get('suggested_rewrite'):
+            # Handle suggested_rewrite - generate if missing for IP & Copyright
+            suggested_fix = issue.get('suggested_rewrite')
+            if not suggested_fix and issue.get('category') == 'IP & Copyright':
+                # Generate fix using Groq
+                suggested_fix = generate_ip_fix_with_groq(issue)
+            
+            if suggested_fix:
                 st.markdown("**Suggested Fix:**")
-                st.success(issue['suggested_rewrite'])
+                st.success(suggested_fix)
                 
                 unique_key = f"copy_{idx}_{issue.get('category', 'unknown')}_{severity}"
                 if st.button(f"Copy Fix #{idx+1}", key=unique_key):
@@ -482,8 +716,31 @@ def render_results(results, bias_findings=None, ip_findings=None, privacy_findin
     
     # Export options
     st.markdown("### 💾 Export")
+    
+    # Generate PDF button
     if st.button("📄 Export PDF Report", use_container_width=True):
-        st.info("PDF export functionality coming soon!")
+        with st.spinner("Generating PDF report..."):
+            try:
+                pdf_bytes = generate_pdf_report(
+                    results, 
+                    bias_findings or [], 
+                    ip_findings or [], 
+                    privacy_findings or [], 
+                    plagiarism_findings or []
+                )
+                
+                # Create download button
+                st.download_button(
+                    label="📥 Download PDF Report",
+                    data=pdf_bytes,
+                    file_name=f"EthicCheck_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+                st.success("✅ PDF report generated successfully!")
+            except Exception as e:
+                st.error(f"Error generating PDF: {str(e)}")
+                st.info("Note: Make sure fpdf is installed: pip install fpdf")
 
 # ==================== MAIN APP ====================
 
@@ -508,7 +765,7 @@ def main():
         st.markdown("---")
         st.markdown("### 🎯 How It Works")
         st.write("""
-        1. Upload your project or paste text
+        1. Upload your project, paste text, or enter GitHub URL
         2. Select analysis options
         3. Get instant AI-powered feedback
         4. Review issues and apply fixes
@@ -526,11 +783,14 @@ def main():
         st.markdown("---")
         st.markdown("### 💡 Tips")
         st.write("""
-        - Use copy-paste for best results
+        - GitHub repos: Max 50MB, 500 files
         - Review all high-priority issues
         - Apply suggested fixes
         - Re-analyze after changes
         """)
+    
+    # Determine default tab based on switch flag
+    default_tab = 0
     
     # Main content
     tab1, tab2 = st.tabs(["📤 Upload & Analyze", "📊 Results"])
@@ -542,8 +802,40 @@ def main():
             # Get input text and dataset
             input_text = ""
             uploaded_df = None
+            is_github_repo = False
             
-            if uploaded_file:
+            # Priority: GitHub URL > File Upload > Text Input
+            if git_url and is_valid_github_url(git_url):
+                is_github_repo = True
+                
+                with st.spinner("🔄 Cloning and analyzing repository..."):
+                    progress_placeholder = st.empty()
+                    
+                    def github_progress(message):
+                        progress_placeholder.info(f"📦 {message}")
+                    
+                    # Analyze GitHub repository
+                    repo_result = analyze_github_repository(git_url, github_progress)
+                    
+                    if repo_result['status'] == 'error':
+                        st.error(f"❌ {repo_result['error']}")
+                        return
+                    
+                    # Store repository info
+                    st.session_state.repo_info = repo_result['repo_info']
+                    
+                    # Get combined content for analysis
+                    content = repo_result['content']
+                    input_text = content['code'] + "\n\n" + content['docs']
+                    
+                    # Success message
+                    progress_placeholder.empty()
+                    st.success(f"✅ {repo_result['message']}")
+                    
+                    # Show repo info
+                    st.info(format_repo_info_display(repo_result['repo_info']))
+                
+            elif uploaded_file:
                 if uploaded_file.type == "application/pdf":
                     input_text = extract_text_from_pdf(uploaded_file)
                 elif uploaded_file.type == "text/csv":
@@ -554,13 +846,11 @@ def main():
                     input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
                 else:
                     input_text = uploaded_file.read().decode('utf-8')
+                    
             elif text_input:
                 input_text = text_input
-            elif git_url:
-                st.warning("Git repository cloning coming soon! Please paste code instead.")
-                return
             else:
-                st.error("Please provide input: upload a file, paste text, or enter a Git URL")
+                st.error("Please provide input: upload a file, paste text, or enter a GitHub URL")
                 return
             
             if not input_text or len(input_text) < 50:
@@ -568,14 +858,14 @@ def main():
                 return
             
             # Auto-detect artifact type
-            artifact_type = detect_artifact_type(input_text, uploaded_df)
+            artifact_type = "Code" if is_github_repo else detect_artifact_type(input_text, uploaded_df)
             
             # Run analysis
             with st.spinner("🔍 Analyzing your project..."):
                 progress = st.progress(0)
                 status = st.empty()
                 
-                # === IP & COPYRIGHT CHECK ===
+                # === IP & COPYRIGHT CHECK (only if enabled) ===
                 ip_copyright_findings = []
                 if check_options.get('copyright', False):
                     status.text("Running IP & Copyright analysis...")
@@ -588,7 +878,7 @@ def main():
                     except Exception as e:
                         st.warning(f"IP & Copyright check encountered an error: {str(e)}")
                 
-                # === PRIVACY CHECK ===
+                # === PRIVACY CHECK (only if enabled) ===
                 privacy_findings = []
                 if check_options.get('privacy', False):
                     status.text("Running Privacy & PII analysis...")
@@ -603,7 +893,7 @@ def main():
                     except Exception as e:
                         st.warning(f"Privacy check encountered an error: {str(e)}")
                 
-                # Code security
+                # Code security (always run for code)
                 status.text("Checking code security...")
                 progress.progress(28)
                 code_issues = detect_code_issues(input_text)
@@ -613,7 +903,7 @@ def main():
                 progress.progress(35)
                 keyword_flags = check_ethical_keywords(input_text)
                 
-                # === BIAS CHECK ===
+                # === BIAS CHECK (only if enabled) ===
                 bias_findings = []
                 if check_options.get('bias', False):
                     status.text("Running bias & fairness analysis...")
@@ -629,7 +919,7 @@ def main():
                     if bias_result["status"] == "success":
                         bias_findings = bias_result["findings"]
                 
-                # === PLAGIARISM CHECK ===
+                # === PLAGIARISM CHECK (only if enabled) ===
                 plagiarism_findings = []
                 if check_options.get('plagiarism', False):
                     status.text("Running plagiarism check (this may take a moment)...")
@@ -667,42 +957,41 @@ def main():
                 status.text("Analysis complete!")
                 
                 if results:
-                    # Add IP & Copyright findings
-                    if ip_copyright_findings:
+                    # Add IP & Copyright findings (only if checked)
+                    if check_options.get('copyright', False) and ip_copyright_findings:
                         results['issues'].extend(ip_copyright_findings)
                         high_ip = [f for f in ip_copyright_findings if f['severity'] == 'high']
                         if high_ip and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add Privacy findings
-                    if privacy_findings:
+                    # Add Privacy findings (only if checked)
+                    if check_options.get('privacy', False) and privacy_findings:
                         results['issues'].extend(privacy_findings)
                         high_privacy = [f for f in privacy_findings if f['severity'] == 'high']
                         if high_privacy and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add Bias findings
-                    if bias_findings:
+                    # Add Bias findings (only if checked)
+                    if check_options.get('bias', False) and bias_findings:
                         results['issues'].extend(bias_findings)
                         high_bias = [f for f in bias_findings if f['severity'] == 'high']
                         if high_bias and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
-                    # Add Plagiarism findings
-                    if plagiarism_findings:
+                    # Add Plagiarism findings (only if checked)
+                    if check_options.get('plagiarism', False) and plagiarism_findings:
                         results['issues'].extend(plagiarism_findings)
                         high_plag = [f for f in plagiarism_findings if f['severity'] == 'high']
                         if high_plag and results.get('overall_score') != 'high':
                             results['overall_score'] = 'high'
                     
                     # Sync plagiarism score with AI detection
-                    # If AI found plagiarism but web search didn't, update the score
-                    ai_plag_issues = [i for i in results.get('issues', []) 
-                                     if i.get('category') == 'Plagiarism' and i.get('severity') == 'high']
-                    current_plag_pct = st.session_state.get('plagiarism_percentage', 0)
-                    if ai_plag_issues and current_plag_pct < 20:
-                        # AI detected plagiarism - set a minimum score
-                        st.session_state.plagiarism_percentage = max(current_plag_pct, 50.0)
+                    if check_options.get('plagiarism', False):
+                        ai_plag_issues = [i for i in results.get('issues', []) 
+                                         if i.get('category') == 'Plagiarism' and i.get('severity') == 'high']
+                        current_plag_pct = st.session_state.get('plagiarism_percentage', 0)
+                        if ai_plag_issues and current_plag_pct < 20:
+                            st.session_state.plagiarism_percentage = max(current_plag_pct, 50.0)
                     
                     # Add code security findings
                     if code_issues:
@@ -728,7 +1017,10 @@ def main():
                     progress.empty()
                     status.empty()
                     
+                    # Show balloons
                     st.balloons()
+                    
+                    # Show success message
                     st.success("✅ Analysis complete! Switch to the **Results** tab to view your report ➡️")
                 else:
                     st.error("Analysis failed. Please check your Groq API key and try again.")

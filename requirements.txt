@@ -27,5 +27,8 @@ requests==2.32.3
 beautifulsoup4==4.12.3
 googlesearch-python==1.2.5
 
+#PDF Download
+fpdf==1.7.2
+
 # Utilities
 tqdm==4.67.1
