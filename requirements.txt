@@ -30,5 +30,8 @@ googlesearch-python==1.2.5
 #PDF Download
 fpdf==1.7.2
 
+#DOC Handling
+python-docx==1.1.2
+
 # Utilities
 tqdm==4.67.1

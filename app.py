@@ -16,6 +16,7 @@ import io
 from dotenv import load_dotenv
 import pandas as pd
 from fpdf import FPDF
+import docx
 
 # ==================== CUSTOM MODULE IMPORTS ====================
 from bias_fairness_checker import (
@@ -155,6 +156,17 @@ def extract_text_from_pdf(pdf_file):
         return text
     except Exception as e:
         return f"Error extracting PDF: {str(e)}"
+
+def extract_text_from_docx(docx_file):
+    """Extract text from uploaded DOCX"""
+    try:
+        doc = docx.Document(io.BytesIO(docx_file.read()))
+        text = ""
+        for paragraph in doc.paragraphs:
+            text += paragraph.text + "\n"
+        return text
+    except Exception as e:
+        return f"Error extracting DOCX: {str(e)}"
 
 def detect_code_issues(code_text):
     """Detect security issues in code"""
@@ -576,8 +588,8 @@ def render_upload_section():
     with col1:
         uploaded_file = st.file_uploader(
             "Upload document or code",
-            type=['txt', 'pdf', 'py', 'md', 'csv'],
-            help="Supported: PDF, TXT, Python (.py), Markdown (.md), CSV"
+            type=['txt', 'pdf', 'py', 'csv', 'docx'],
+            help="Supported: PDF, TXT, Python, CSV, DOCX"
         )
 
         if uploaded_file is not None:
@@ -765,29 +777,26 @@ def main():
         st.markdown("---")
         st.markdown("### 🎯 How It Works")
         st.write("""
-        1. Submit your project (choose one):
-           - GitHub repository URL (Priority 1)
-           - Upload file (Priority 2)
-           - Paste text (Priority 3)
+        1. Upload your project, paste text, or enter GitHub URL
         2. Select analysis options
         3. Get instant AI-powered feedback
         4. Review issues and apply fixes
-        5. Export PDF report
         """)
         
         st.markdown("---")
-        st.markdown("### 📁 Supported Formats")
+        st.markdown("### 📥 Input Priority")
         st.write("""
-        **GitHub Repositories:**
-        - Public repos only
-        - Max 50MB, 500 files
+        **Priority Order:**
+        1. 🔗 GitHub URL (highest)
+        2. 📄 File Upload
+        3. 📝 Paste Text (lowest)
         
-        **File Uploads:**
+        **Supported Files:**
         - PDF documents
-        - Text files (.txt)
+        - TXT files
         - Python code (.py)
-        - Markdown (.md)
         - CSV datasets
+        - DOCX documents
         """)
         
         st.markdown("---")
@@ -802,10 +811,10 @@ def main():
         st.markdown("---")
         st.markdown("### 💡 Tips")
         st.write("""
-        - Use GitHub URL for full repo analysis
-        - Plagiarism check takes 20-40 seconds
+        - GitHub repos: Max 50MB, 500 files
         - Review all high-priority issues
-        - Download PDF report for records
+        - Apply suggested fixes
+        - Re-analyze after changes
         """)
     
     # Determine default tab based on switch flag
@@ -857,10 +866,13 @@ def main():
             elif uploaded_file:
                 if uploaded_file.type == "application/pdf":
                     input_text = extract_text_from_pdf(uploaded_file)
+                elif uploaded_file.type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+                    input_text = extract_text_from_docx(uploaded_file)
                 elif uploaded_file.type == "text/csv":
                     uploaded_df = pd.read_csv(uploaded_file)
                     input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
                 else:
+                    # Handle TXT and PY files
                     input_text = uploaded_file.read().decode('utf-8')
                     
             elif text_input:
