@@ -75,6 +75,5 @@ ethiccheck/
 - Streamlit for rapid web development
 
 ---
----
 
 **Built with ❤️ for ethical AI development**
