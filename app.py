@@ -1,6 +1,6 @@
 """
 EthicCheck - AI-Powered Ethical Analysis for Student Projects
-Complete Streamlit Application with Groq API Integration + GitHub Analysis
+Complete Streamlit Application with Groq API Integration + GitHub Analysis + Reset Button
 """
 
 import streamlit as st
@@ -103,6 +103,20 @@ st.markdown("""
         font-weight: 600;
         border-radius: 8px;
     }
+    div[data-testid="column"] > div > div.reset-button button {
+        background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%) !important;
+        color: white !important;
+        border: none !important;
+        padding: 0.6rem 1.5rem !important;
+        font-weight: 600 !important;
+        border-radius: 8px !important;
+        transition: all 0.3s ease !important;
+    }
+    div[data-testid="column"] > div > div.reset-button button:hover {
+        background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%) !important;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4) !important;
+    }
     .repo-info-box {
         background: #f8f9fa;
         border-left: 4px solid #667eea;
@@ -122,6 +136,8 @@ if 'active_tab' not in st.session_state:
     st.session_state.active_tab = 0
 if 'repo_info' not in st.session_state:
     st.session_state.repo_info = None
+if 'reset_counter' not in st.session_state:
+    st.session_state.reset_counter = 0
 
 # Initialize Groq client
 @st.cache_resource
@@ -143,6 +159,7 @@ def init_embedding_model():
 
 groq_client = init_groq_client()
 embedding_model = init_embedding_model()
+
 
 # ==================== UTILITY FUNCTIONS ====================
 
@@ -586,25 +603,31 @@ def render_upload_section():
     col1, col2 = st.columns([2, 1])
     
     with col1:
+        # File uploader with unique key based on reset counter
         uploaded_file = st.file_uploader(
             "Upload document or code",
             type=['txt', 'pdf', 'py', 'csv', 'docx'],
-            help="Supported: PDF, TXT, Python, CSV, DOCX"
+            help="Supported: PDF, TXT, Python, CSV, DOCX",
+            key=f"file_uploader_{st.session_state.reset_counter}"
         )
 
         if uploaded_file is not None:
             st.success(f"✅ File uploaded: {uploaded_file.name} ({uploaded_file.size} bytes)")
         
+        # Text area with unique key based on reset counter
         text_input = st.text_area(
             "Or paste your content here",
             height=200,
-            placeholder="Paste your project proposal, code, or methodology..."
+            placeholder="Paste your project proposal, code, or methodology...",
+            key=f"text_input_{st.session_state.reset_counter}"
         )
         
+        # GitHub URL with unique key based on reset counter
         git_url = st.text_input(
             "Or enter GitHub repository URL",
             placeholder="https://github.com/username/repo",
-            help="Enter a public GitHub repository URL. Max size: 50MB, 500 files"
+            help="Enter a public GitHub repository URL. Max size: 50MB, 500 files",
+            key=f"git_url_{st.session_state.reset_counter}"
         )
         
         # Show URL validation
@@ -626,6 +649,30 @@ def render_upload_section():
         
         if git_url:
             st.caption("📦 Repository analysis includes all code files")
+        
+        # Reset button with custom styling
+        # In render_upload_section(), find the reset button section and replace with:
+
+        # Reset button with custom styling
+        st.markdown("---")
+        st.markdown('<div class="reset-button">', unsafe_allow_html=True)
+        if st.button(
+            "🔄 Reset All Inputs", 
+            use_container_width=True, 
+            help="Clear all inputs and results",
+            key=f"reset_btn_{st.session_state.reset_counter}"
+        ):
+            st.session_state.reset_counter += 1
+            st.session_state.analysis_results = None
+            st.session_state.bias_findings = []
+            st.session_state.ip_findings = []
+            st.session_state.privacy_findings = []
+            st.session_state.plagiarism_findings = []
+            st.session_state.plagiarism_percentage = None
+            st.session_state.plagiarism_sources = []
+            st.session_state.repo_info = None
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
     
     return uploaded_file, text_input, git_url, check_options
 
@@ -633,8 +680,6 @@ def render_results(results, bias_findings=None, ip_findings=None, privacy_findin
     """Render analysis results"""
     if not results:
         return
-    
-    # REMOVED: Repository Information section
     
     # Overall metrics
     st.markdown("### 📊 Analysis Summary")
@@ -815,10 +860,8 @@ def main():
         - Review all high-priority issues
         - Apply suggested fixes
         - Re-analyze after changes
+        - Use Reset button to start over
         """)
-    
-    # Determine default tab based on switch flag
-    default_tab = 0
     
     # Main content
     tab1, tab2 = st.tabs(["📤 Upload & Analyze", "📊 Results"])
