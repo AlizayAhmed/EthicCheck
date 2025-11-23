@@ -576,8 +576,8 @@ def render_upload_section():
     with col1:
         uploaded_file = st.file_uploader(
             "Upload document or code",
-            type=['txt', 'pdf', 'py', 'md', 'ipynb', 'csv', 'xlsx'],
-            help="Supported: PDF, TXT, Python, Markdown, Jupyter Notebooks, CSV, Excel"
+            type=['txt', 'pdf', 'py', 'md', 'csv'],
+            help="Supported: PDF, TXT, Python (.py), Markdown (.md), CSV"
         )
 
         if uploaded_file is not None:
@@ -765,10 +765,29 @@ def main():
         st.markdown("---")
         st.markdown("### 🎯 How It Works")
         st.write("""
-        1. Upload your project, paste text, or enter GitHub URL
+        1. Submit your project (choose one):
+           - GitHub repository URL (Priority 1)
+           - Upload file (Priority 2)
+           - Paste text (Priority 3)
         2. Select analysis options
         3. Get instant AI-powered feedback
         4. Review issues and apply fixes
+        5. Export PDF report
+        """)
+        
+        st.markdown("---")
+        st.markdown("### 📁 Supported Formats")
+        st.write("""
+        **GitHub Repositories:**
+        - Public repos only
+        - Max 50MB, 500 files
+        
+        **File Uploads:**
+        - PDF documents
+        - Text files (.txt)
+        - Python code (.py)
+        - Markdown (.md)
+        - CSV datasets
         """)
         
         st.markdown("---")
@@ -783,10 +802,10 @@ def main():
         st.markdown("---")
         st.markdown("### 💡 Tips")
         st.write("""
-        - GitHub repos: Max 50MB, 500 files
+        - Use GitHub URL for full repo analysis
+        - Plagiarism check takes 20-40 seconds
         - Review all high-priority issues
-        - Apply suggested fixes
-        - Re-analyze after changes
+        - Download PDF report for records
         """)
     
     # Determine default tab based on switch flag
@@ -840,9 +859,6 @@ def main():
                     input_text = extract_text_from_pdf(uploaded_file)
                 elif uploaded_file.type == "text/csv":
                     uploaded_df = pd.read_csv(uploaded_file)
-                    input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
-                elif uploaded_file.type in ["application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]:
-                    uploaded_df = pd.read_excel(uploaded_file)
                     input_text = f"Dataset: {len(uploaded_df)} rows, {len(uploaded_df.columns)} columns\nColumns: {', '.join(uploaded_df.columns)}"
                 else:
                     input_text = uploaded_file.read().decode('utf-8')
@@ -926,25 +942,21 @@ def main():
                     progress.progress(55)
                     
                     try:
-                        # Skip plagiarism check for code
-                        if artifact_type != "Code":
-                            def plag_progress(current, total, phrase):
-                                pct = 55 + int((current / total) * 25)
-                                progress.progress(min(pct, 80))
-                                status.text(f"Checking phrase {current}/{total}...")
-                            
-                            plagiarism_result = run_plagiarism_check(
-                                input_text, 
-                                max_phrases=8,
-                                progress_callback=plag_progress
-                            )
-                            
-                            if plagiarism_result["status"] == "success":
-                                plagiarism_findings = plagiarism_result["findings"]
-                                st.session_state.plagiarism_percentage = plagiarism_result.get("plagiarism_percentage", 0)
-                                st.session_state.plagiarism_sources = plagiarism_result.get("sources", [])
-                        else:
-                            st.info("ℹ️ Plagiarism check skipped for code files")
+                        def plag_progress(current, total, phrase):
+                            pct = 55 + int((current / total) * 25)
+                            progress.progress(min(pct, 80))
+                            status.text(f"Checking phrase {current}/{total}...")
+                        
+                        plagiarism_result = run_plagiarism_check(
+                            input_text, 
+                            max_phrases=8,
+                            progress_callback=plag_progress
+                        )
+                        
+                        if plagiarism_result["status"] == "success":
+                            plagiarism_findings = plagiarism_result["findings"]
+                            st.session_state.plagiarism_percentage = plagiarism_result.get("plagiarism_percentage", 0)
+                            st.session_state.plagiarism_sources = plagiarism_result.get("sources", [])
                     except Exception as e:
                         st.warning(f"Plagiarism check encountered an error: {str(e)}")
                 
